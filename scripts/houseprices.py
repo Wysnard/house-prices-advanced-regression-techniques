@@ -16,8 +16,8 @@ test_df = test_df.drop(['Id'], axis=1)
 corr = train_df.corr()
 corr.to_csv('corr.csv')
 
-train_df['SalePrice'] = np.log1p(train_df['SalePrice'])
 train_df = train_df.drop(train_df[(train_df['GrLivArea'] > 4000) & (train_df['SalePrice'] < 300000)].index)
+train_df['SalePrice'] = np.log1p(train_df['SalePrice'])
 y_train = train_df.SalePrice.values
 train_df = train_df.drop(['SalePrice'], axis=1)
 
@@ -32,6 +32,7 @@ v = {'MSZoning' : df['MSZoning'].mode()[0], 'BsmtQual' : 'NA',
 	'BsmtHalfBath' : 0, 'LotFrontage' : df['Neighborhood'].map(LotFgrp),
 	'GarageArea' : 0, 'GarageCars' : 0, 'GarageYrBlt' : 0, 'MasVnrArea' : 0}
 df.fillna(value=v, inplace=True)
+df['Age'] = df['YrSold'] - df['YearBuilt']
 df['MSSubClass'] = df['MSSubClass'].apply(str)
 df['YrSold'] = df['YrSold'].astype(str)
 df['MoSold'] = df['MoSold'].astype(str)
@@ -72,6 +73,7 @@ from sklearn.preprocessing import RobustScaler
 from sklearn.base import BaseEstimator, TransformerMixin, RegressorMixin, clone
 from sklearn.model_selection import KFold, cross_val_score, train_test_split
 from sklearn.metrics import mean_squared_error
+from sklearn.neural_network import MLPRegressor
 import xgboost as xgb
 import lightgbm as lgb
 
@@ -86,10 +88,6 @@ lasso = make_pipeline(RobustScaler(), Lasso(alpha =0.0005, random_state=1))
 ENet = make_pipeline(RobustScaler(), ElasticNet(alpha=0.0005, l1_ratio=.9, random_state=3))
 KRR = KernelRidge(alpha=0.6, kernel='polynomial', degree=2, coef0=2.5)
 Bayes = BayesianRidge()
-GBoost = GradientBoostingRegressor(n_estimators=3000, learning_rate=0.05,
-                                  max_depth=4, max_features='sqrt',
-                                  min_samples_leaf=15, min_samples_split=10,
-                                  loss='huber', random_state =5)
 model_xgb = xgb.XGBRegressor(colsample_bytree=0.4603, gamma=0.0468,
                              learning_rate=0.05, max_depth=3,
                              min_child_weight=1.7817, n_estimators=2200,
@@ -102,6 +100,8 @@ model_lgb = lgb.LGBMRegressor(objective='regression',num_leaves=5,
                               bagging_freq = 5, feature_fraction = 0.2319,
                               feature_fraction_seed=9, bagging_seed=9,
                               min_data_in_leaf =6, min_sum_hessian_in_leaf = 11)
+NN = MLPRegressor(solver='lbfgs',
+					activation='logistic', random_state=5)
 
 score = rmsle_cv(lasso)
 print("\nLasso score: {:.4f} ({:.4f})\n".format(score.mean(), score.std()))
@@ -111,34 +111,34 @@ score = rmsle_cv(KRR)
 print("\nKernelRidge score: {:.4f} ({:.4f})\n".format(score.mean(), score.std()))
 score = rmsle_cv(Bayes)
 print("\nBayesianRidge score: {:.4f} ({:.4f})\n".format(score.mean(), score.std()))
-score = rmsle_cv(GBoost)
-print("\nGBoost score: {:.4f} ({:.4f})\n".format(score.mean(), score.std()))
 score = rmsle_cv(model_xgb)
 print("\nXGB Reg score: {:.4f} ({:.4f})\n".format(score.mean(), score.std()))
 score = rmsle_cv(model_lgb)
 print("\nLGB score: {:.4f} ({:.4f})\n".format(score.mean(), score.std()))
-
-class AveragingModels(BaseEstimator, RegressorMixin, TransformerMixin):
-	def __init__(self, models):
-		self.models = models
-
-	def fit(self, X, y):
-		self.models_ = [clone(x) for x in self.models]
-		for model in self.models_:
-			model.fit(X, y)
-		return self
-
-	def predict(self, X):
-		predictions = np.column_stack([
-			model.predict(X) for model in self.models_
-		])
-		return np.mean(predictions, axis=1)
-
-averaged_models = AveragingModels(models = (ENet, GBoost, KRR, lasso, Bayes))
-
-score = rmsle_cv(averaged_models)
-print(" Averaged base models score: {:.4f} ({:.4f})\n".format(score.mean(), score.std()))
-
+score = rmsle_cv(NN)
+print("\nNeural Network score: {:.4f} ({:.4f})\n".format(score.mean(), score.std()))
+#
+# class AveragingModels(BaseEstimator, RegressorMixin, TransformerMixin):
+# 	def __init__(self, models):
+# 		self.models = models
+#
+# 	def fit(self, X, y):
+# 		self.models_ = [clone(x) for x in self.models]
+# 		for model in self.models_:
+# 			model.fit(X, y)
+# 		return self
+#
+# 	def predict(self, X):
+# 		predictions = np.column_stack([
+# 			model.predict(X) for model in self.models_
+# 		])
+# 		return np.mean(predictions, axis=1)
+#
+# averaged_models = AveragingModels(models = (ENet, KRR, lasso, Bayes))
+#
+# score = rmsle_cv(averaged_models)
+# print(" Averaged base models score: {:.4f} ({:.4f})\n".format(score.mean(), score.std()))
+#
 class StackingAveragedModels(BaseEstimator, RegressorMixin, TransformerMixin):
     def __init__(self, base_models, meta_model, n_folds=5):
         self.base_models = base_models
@@ -174,7 +174,7 @@ class StackingAveragedModels(BaseEstimator, RegressorMixin, TransformerMixin):
             for base_models in self.base_models_ ])
         return self.meta_model_.predict(meta_features)
 
-stacked_averaged_models = StackingAveragedModels(base_models = (ENet, GBoost, KRR, Bayes),
+stacked_averaged_models = StackingAveragedModels(base_models = (ENet, KRR, Bayes),
                                                  meta_model = lasso)
 
 score = rmsle_cv(stacked_averaged_models)
@@ -198,13 +198,18 @@ lgb_train_pred = model_lgb.predict(train)
 lgb_pred = np.expm1(model_lgb.predict(test.values))
 print(rmsle(y_train, lgb_train_pred))
 
+NN.fit(train, y_train)
+NN_train_pred = NN.predict(train)
+NN_pred = np.expm1(NN.predict(test.values))
+print(rmsle(y_train, NN_train_pred))
+
 '''RMSE on the entire Train data when averaging'''
 
 print('RMSLE score on train data:')
-print(rmsle(y_train,stacked_train_pred*0.70 +
-               xgb_train_pred*0.15 + lgb_train_pred*0.15 ))
+print(rmsle(y_train,stacked_train_pred*0.70 + NN_train_pred*0.05 +
+               xgb_train_pred*0.10 + lgb_train_pred*0.15 ))
 
-ensemble = stacked_pred*0.70 + xgb_pred*0.15 + lgb_pred*0.15
+ensemble = stacked_pred*0.70 + NN_pred*0.05 + xgb_pred*0.10 + lgb_pred*0.15
 
 sub = pd.DataFrame()
 sub['Id'] = test_id
